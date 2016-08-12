@@ -24,7 +24,7 @@ BSK Consulting GmbH
 
 DISCLAIMER - USE AT YOUR OWN RISK.
 """
-__version__ = '0.15.2'
+__version__ = '0.15.5'
 
 import os
 import argparse
@@ -154,7 +154,7 @@ class Loki():
         if platform == "osx":
             allExcludes = self.LINUX_PATH_SKIPS_START
 
-        for root, directories, files in os.walk(path, onerror=walk_error, followlinks=False):
+        for root, directories, files in os.walk(unicode(path), onerror=walk_error, followlinks=False):
 
                 if platform == "linux" or platform == "osx":
                     # Skip paths that start with ..
@@ -325,21 +325,25 @@ class Loki():
                                    fileData = decompressedData
 
                             # Scan the read data
-                            for (score, rule, description, matched_strings) in \
-                                    self.scan_data(fileData, fileType, filename, filePath, extension, md5):
+                            try:
+                                for (score, rule, description, matched_strings) in \
+                                        self.scan_data(fileData, fileType, removeNonAsciiDrop(filename),
+                                                       removeNonAscii(filePath), extension, md5):
 
-                                # Message
-                                message = "Yara Rule MATCH: %s TYPE: %s DESCRIPTION: %s FILE: %s FIRST_BYTES: %s %s " \
-                                          "MATCHES: %s" % \
-                                          (rule, fileType, description, filePath, first_bytes, hash_string,
-                                           matched_strings)
+                                    # Message
+                                    message = "Yara Rule MATCH: %s TYPE: %s DESCRIPTION: %s FILE: %s FIRST_BYTES: %s %s " \
+                                              "MATCHES: %s" % \
+                                              (rule, fileType, description, filePath, first_bytes, hash_string,
+                                               matched_strings)
 
-                                if score >= 75:
-                                    logger.log("ALERT", message)
-                                elif score >= 60:
-                                    logger.log("WARNING", message)
-                                elif score >= 40:
-                                    logger.log("NOTICE", message)
+                                    if score >= 75:
+                                        logger.log("ALERT", message)
+                                    elif score >= 60:
+                                        logger.log("WARNING", message)
+                                    elif score >= 40:
+                                        logger.log("NOTICE", message)
+                            except Exception, e:
+                                logger.log("ERROR", "Cannot YARA scan file: %s" % removeNonAsciiDrop(filePath))
 
                     except Exception, e:
                         if logger.debug:
@@ -418,12 +422,17 @@ class Loki():
         import ctypes
         import locale
         windll = ctypes.windll.kernel32
-        if locale.windows_locale[ windll.GetUserDefaultUILanguage() ] == 'fr_FR':
-            return (owner.upper().startswith("SERVICE LOCAL") or 
+        locale = locale.windows_locale[ windll.GetUserDefaultUILanguage() ]
+        if locale == 'fr_FR':
+            return (owner.upper().startswith("SERVICE LOCAL") or
                 owner.upper().startswith(u"SERVICE RÃSEAU") or
 #                owner.upper().startswith(u"SystÃ¨me") or ##Not matching
                 owner == u"SystÃ¨me" or
                 owner.upper().startswith(u"AUTORITE NT\SystÃ¨me"))
+        elif locale == 'ru_RU':
+            return (owner.upper().startswith("NET") or
+                owner == u"система" or
+                owner.upper().startswith("LO"))
         else:
             return ( owner.upper().startswith("NT ") or owner.upper().startswith("NET") or
                 owner.upper().startswith("LO") or
@@ -651,8 +660,8 @@ class Loki():
             if name == "lsm.exe" and priority is not 8:
                 logger.log("NOTICE", "lsm.exe priority is not 8 PID: %s NAME: %s OWNER: %s CMD: %s PATH: %s" % (
                     str(pid), name, owner, cmd, path))
-            if name == "lsm.exe" and not ( owner.startswith("NT ") or owner.startswith("LO") or owner.startswith("SYSTEM") ):
-                logger.log("WARNING", "lsm.exe process owner is suspicious PID: %s NAME: %s OWNER: %s CMD: %s PATH: %s" % (
+            if name == "lsm.exe" and not ( owner.startswith("NT ") or owner.startswith("LO") or owner.startswith("SYSTEM")  or owner.startswith(u"система")):
+                logger.log(u"WARNING", "lsm.exe process owner is suspicious PID: %s NAME: %s OWNER: %s CMD: %s PATH: %s" % (
                     str(pid), name, owner, cmd, path))
             if wininit_pid > 0:
                 if name == "lsm.exe" and not parent_pid == wininit_pid:
@@ -767,7 +776,7 @@ class Loki():
         try:
             for ioc_filename in os.listdir(ioc_directory):
                 if 'c2' in ioc_filename:
-                    with open(os.path.join(ioc_directory, ioc_filename), 'r') as file:
+                    with codecs.open(os.path.join(ioc_directory, ioc_filename), 'r', encoding='utf-8') as file:
                         lines = file.readlines()
 
                         for line in lines:
@@ -801,7 +810,7 @@ class Loki():
         try:
             for ioc_filename in os.listdir(ioc_directory):
                 if 'filename' in ioc_filename:
-                    with open(os.path.join(ioc_directory, ioc_filename), 'r') as file:
+                    with codecs.open(os.path.join(ioc_directory, ioc_filename), 'r', encoding='utf-8') as file:
                         lines = file.readlines()
 
                         # Last Comment Line
@@ -909,7 +918,7 @@ class Loki():
                 if 'hash' in ioc_filename:
                     if false_positive and 'falsepositive' not in ioc_filename:
                         continue
-                    with open(os.path.join(ioc_directory, ioc_filename), 'r') as file:
+                    with codecs.open(os.path.join(ioc_directory, ioc_filename), 'r', encoding='utf-8') as file:
                         lines = file.readlines()
 
                         for line in lines:
@@ -1037,7 +1046,8 @@ class LokiLogger():
     def log(self, mes_type, message):
 
         # Remove all non-ASCII characters
-        message = removeNonAsciiDrop(message)
+        # message = removeNonAsciiDrop(message)
+        codecs.register(lambda message: codecs.lookup('utf-8') if message == 'cp65001' else None)
 
         if not args.debug and mes_type == "DEBUG":
             return
@@ -1066,6 +1076,7 @@ class LokiLogger():
         # Prepare Message
         #message = removeNonAsciiDrop(message)
         codecs.register(lambda message: codecs.lookup('utf-8') if message == 'cp65001' else None)
+        message = message.encode(sys.stdout.encoding, errors='replace')
 
         if self.csv:
             print "{0},{1},{2},{3}".format(getSyslogTimestamp(),self.hostname,mes_type,message)
@@ -1134,9 +1145,9 @@ class LokiLogger():
             # Write to file
             with codecs.open(self.log_file, "a", encoding='utf-8') as logfile:
                 if self.csv:
-                    logfile.write("{0},{1},{2},{3}\n".format(getSyslogTimestamp(),self.hostname,mes_type,message))
+                    logfile.write(u"{0},{1},{2},{3}\n".format(getSyslogTimestamp(),self.hostname,mes_type,message))
                 else:
-                    logfile.write("%s %s LOKI: %s\n" % (getSyslogTimestamp(), self.hostname, message))
+                    logfile.write(u"%s %s LOKI: %s\n" % (getSyslogTimestamp(), self.hostname, message))
         except Exception, e:
             traceback.print_exc()
             print "Cannot print to log file {0}".format(self.log_file)
@@ -1225,7 +1236,7 @@ if __name__ == '__main__':
     # Remove old log file
     if os.path.exists(args.l):
         os.remove(args.l)
-	
+
     # Computername
     if platform == "linux" or platform == "osx":
         t_hostname = os.uname()[1]
